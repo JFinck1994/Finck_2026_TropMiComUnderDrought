@@ -1,0 +1,408 @@
+---
+title: "Fig. 3: Relative abundances of putative soil organic matter (SOM)-cycling taxa"
+author: "Jessica Finck"
+date: "2026-02-01"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+set.seed(123)
+```
+
+This script is used to analyse the cumulative and individual abundances of putative soil organic matter (SOM)-cycling taxa at the phylum and class level for both bacteria and fungi. Taxa selection was made based on current literature (as of Nov. 2025).
+
+### 1 \| Pre-processing: Define `phyloseq` objects for bacteria and fungi
+
+Prior to analysis, we have to create a phyloseq object from our data. This will be used for most of the downstream analysis.
+
+**Important!** The file 'rooted_tree.nwk' is generated via QIIME2 pre-processing workflow. The detailed script can be [**found here**](https://github.com/JFinck1994/general_scripts/blob/main/qiime2_amplicon-16S-PE-read-processing.sh)**.**
+
+```{r phyloseq, tidy=TRUE, message=FALSE, warning=FALSE, results='hide'}
+## Load dependencies
+library(readxl) # import xlsx files
+library(ape)    # import nwk files
+library(dplyr)  # data wrangling
+
+## Import data 
+otu_bac <- read_excel("BAC_silva138.2.xlsx", sheet = "asv") %>% as.data.frame()
+tax_bac <- read_excel("BAC_silva138.2.xlsx", sheet = "tax") %>% as.data.frame()
+data_bac <- read_excel("BAC_silva138.2.xlsx", sheet = "meta_all") %>% as.data.frame()
+tree_bac <- ape::read.tree("BAC_rooted_tree_dada2.nwk")
+
+otu_fun <- read_excel("FUN_UNITE10.xlsx", sheet = "asv") %>% as.data.frame()
+tax_fun <- read_excel("FUN_UNITE10.xlsx", sheet = "tax") %>% as.data.frame()
+data_fun <- read_excel("FUN_UNITE10.xlsx", sheet = "meta_all") %>% as.data.frame()
+tree_fun <- ape::read.tree("FUN_rooted_tree_dada2.nwk")
+
+## Format variable classes
+library(dplyr)  # data wrangling
+
+data_bac$site <- as.factor(data_bac$site)
+data_bac$subsite <- as.factor(data_bac$subsite)
+data_bac$season <- as.factor(data_bac$season)
+
+data_fun$site <- as.factor(data_fun$site)
+data_fun$subsite <- as.factor(data_fun$subsite)
+data_fun$season <- as.factor(data_fun$season)
+
+## Adjust taxa names  
+tax_bac$Kingdom = gsub("d__","",as.character(tax_bac$Kingdom))
+tax_bac$Phylum = gsub("p__","",as.character(tax_bac$Phylum))
+tax_bac$Class = gsub("c__","",as.character(tax_bac$Class))
+tax_bac$Order = gsub("o__","",as.character(tax_bac$Order))
+tax_bac$Family = gsub("f__","",as.character(tax_bac$Family))
+tax_bac$Genus = gsub("g__","",as.character(tax_bac$Genus))
+tax_bac$Species = gsub("s__","",as.character(tax_bac$Species))
+otu_bac <- otu_bac %>% tibble::column_to_rownames("asv")
+tax_bac <- tax_bac %>% tibble::column_to_rownames("asv")
+data_bac <- data_bac %>% tibble::column_to_rownames("smp_id")
+
+tax_fun$Kingdom = gsub("k__","",as.character(tax_fun$Kingdom))
+tax_fun$Phylum = gsub("p__","",as.character(tax_fun$Phylum))
+tax_fun$Class = gsub("c__","",as.character(tax_fun$Class))
+tax_fun$Order = gsub("o__","",as.character(tax_fun$Order))
+tax_fun$Family = gsub("f__","",as.character(tax_fun$Family))
+tax_fun$Genus = gsub("g__","",as.character(tax_fun$Genus))
+tax_fun$Species = gsub("s__","",as.character(tax_fun$Species))
+
+otu_fun <- otu_fun %>% tibble::column_to_rownames("asv")
+tax_fun <- tax_fun %>% tibble::column_to_rownames("asv")
+data_fun <- data_fun %>% tibble::column_to_rownames("smp_id")
+
+## Assemble ps objects 
+library(phyloseq)
+
+otu_bac <- as.matrix(otu_bac)
+tax_bac <- as.matrix(tax_bac)
+OTU_B = phyloseq::otu_table(otu_bac, taxa_are_rows = T)
+TAX_B = phyloseq::tax_table(tax_bac)
+samples_B = phyloseq::sample_data(data_bac)
+tree_B = phyloseq::phy_tree(tree_bac)
+ps.bac <- phyloseq::phyloseq(OTU_B, TAX_B, samples_B, tree_B)
+
+otu_fun <- as.matrix(otu_fun)
+tax_fun <- as.matrix(tax_fun)
+OTU_F = phyloseq::otu_table(otu_fun, taxa_are_rows = T)
+TAX_F = phyloseq::tax_table(tax_fun)
+samples_F = phyloseq::sample_data(data_fun)
+tree_F = phyloseq::phy_tree(tree_fun)
+ps.fun <- phyloseq::phyloseq(OTU_F, TAX_F, samples_F, tree_F)
+
+ps.bac
+ps.fun
+
+## Tidy ps objects w/ microeco
+library(microeco)
+library(file2meco)
+
+meco.fun = phyloseq2meco(ps.fun)
+meco.bac = phyloseq2meco(ps.bac)
+
+meco.bac$tax_table %>% base::subset(Kingdom == "k__Archaea" | Kingdom == "k__Bacteria")
+meco.fun$tax_table %>% base::subset(Kingdom == "k__Fungi")
+
+meco.bac$filter_pollution(taxa = c("mitochondria", "chloroplast"))
+meco.fun$filter_pollution(taxa = c("mitochondria", "chloroplast"))
+
+meco.bac$tidy_dataset()                                                         
+meco.fun$tidy_dataset()
+
+## Convert back to ps
+ps.meco.bac = meco2phyloseq(meco.bac)
+ps.meco.fun = meco2phyloseq(meco.fun)
+
+ps.bac
+ps.meco.bac
+ps.fun
+ps.meco.fun
+
+## Normalize
+library(microbiomeMarker) # TSS normalization
+library(dplyr)            # data wrangling
+
+ps.bac.tss = ps.meco.bac %>% microbiomeMarker::normalize(method = "TSS")
+ps.fun.tss = ps.meco.fun %>% microbiomeMarker::normalize(method = "TSS")
+```
+
+### 2 \| Define putative SOM-cycling taxa
+
+```{r filter, tidy=TRUE, message=FALSE, warning=FALSE, results='hide'}
+## Bacteria: phylum level
+chosen_bac <- c(
+  "Pseudomonadota",
+  "Bacteroidota",
+  "Bacillota",
+  "Acidobacteriota",
+  "Actinomycetota",
+  "Verrucomicrobiota",
+  "Chloroflexota",
+  "Planctomycetota",
+  "Armatimonadota"
+)
+
+## Bacteria: class level
+chosen_bac2 <- c(
+  "Actinobacteria",
+  "Alphaproteobacteria",
+  "Bacilli",
+  "Acidobacteriae",
+  "Subgroup_5",
+  "Gemmatimonadia",
+  "Vicinamibacteria",
+  "Chloroflexia",
+  "Verrucomicrobiia",
+  "Thermoleophilia",
+  "Planctomycetes",
+  "Acidimicrobiia",
+  "Omnitrophia",
+  "Phycisphaerae",
+  "Chthonomonadia",
+  "Armatimonadia",
+  "Bacteroidia",
+  "Clostridia",
+  "Negativicutes",
+  "Desulfitobacteriia",
+  "Sulfobacillia",
+  "Blastocatellia",
+  "Holophagae",
+  "Thermoanaerobaculia",
+  "Ktedonobacteria",
+  "TK10",
+  "AD3",
+  "JG30-KF-CM66",
+  "SHA-26",
+  "Anaerolineae",
+  "Chloroflexia",
+  "BD7-11",
+  "Pla4_lineage",
+  "vadinHA49"
+  )
+
+## Fungi: class level
+chosen_fun <- c(
+  "Agaricomycetes",
+  "Sordariomycetes",
+  "Eurotiomycetes",
+  "Dothideomycetes",
+  "Leotiomycetes",
+  "Umbelopsidomycetes",
+  "Mucoromycetes",
+  "Rhizophydiomycetes",
+  "Chytridiomycetes",
+  "Mortierellomycetes",
+  "Spizellomycetes",
+  "Neocallimastigomycetes",
+  "Monoblepharidomycetes")
+
+## Fungi: order level
+chosen_fun2 <- c(
+  "Agaricales",
+  "Atheliales",
+  "Boletales",
+  "Hymenochaetales",
+  "Polyporales",
+  "Russulales",
+  "Trechisporales",
+  "Thelephorales",
+  "Sordariales",
+  "Xylariales",
+  "Hypocreales",
+  "Coniochaetales",
+  "Chaetosphaeriales",
+  "Amphisphaeriales",
+  "Boliniales",
+  "Calosphaeriales",
+  "Microascales",
+  "Diaporthales",
+  "Glomerellales",
+  "Pleosporales",
+  "Capnodiales",
+  "Mycosphaerellales",
+  "Venturiales",
+  "Dothideales",
+  "Tubeufiales",
+  "Eurotiales",
+  "Helotiales",
+  "Leotiales",
+  "Rhytismatales",
+  "Mucorales",
+  "Mortierellales",
+  "Umbelopsidales"
+)
+```
+
+### 3 \| Plot cumulative abundance of bacterial and fungal SOM-cycling taxa
+
+#### 3.1 \| Filter microbial data for putative SOM-cyclers
+
+Using the initially created `phyloseq` object, we apply a filter based on the selection of putative SOM-cycling taxa from above, so that only putative taxa that occur in our samples remain. In this particular case, for our data, we found an overabundance of *Gammaproteobacteria* that overshadowed the overarching pattern for other putative SOM-cycling taxa. Hence, we excluded *Gammaproteobacteria* class specifically at a later step to illustrate cumulative abundances of other SOM-cycling taxa to show overall trends.
+
+```{r import, tidy=TRUE, message=FALSE, warning=FALSE, results='hide'}
+## Extract & prepare the data (Bacteria)
+library(phyloseq)
+df_bac <- psmelt(ps.bac.tss) %>% dplyr::filter(Sample != "DSTB") 
+df_bac$Kingdom <- gsub("^[kpcofgs]__*", "", df_bac$Kingdom)
+df_bac$Phylum <- gsub("^[kpcofgs]__*", "", df_bac$Phylum)
+df_bac$Class <- gsub("^[kpcofgs]__*", "", df_bac$Class)
+df_bac$Order <- gsub("^[kpcofgs]__*", "", df_bac$Order)
+df_bac$Family <- gsub("^[kpcofgs]__*", "", df_bac$Family)
+df_bac$Genus <- gsub("^[kpcofgs]__*", "", df_bac$Genus)
+df_bac$Species <- gsub("^[kpcofgs]__*", "", df_bac$Species)
+
+## Extract & prepare the data (Fungi)
+df_fun <- psmelt(ps.fun.tss)
+df_fun$Kingdom <- gsub("^[kpcofgs]__*", "", df_fun$Kingdom)
+df_fun$Phylum <- gsub("^[kpcofgs]__*", "", df_fun$Phylum)
+df_fun$Class <- gsub("^[kpcofgs]__*", "", df_fun$Class)
+df_fun$Order <- gsub("^[kpcofgs]__*", "", df_fun$Order)
+df_fun$Family <- gsub("^[kpcofgs]__*", "", df_fun$Family)
+df_fun$Genus <- gsub("^[kpcofgs]__*", "", df_fun$Genus)
+df_fun$Species <- gsub("^[kpcofgs]__*", "", df_fun$Species)
+
+## Extract unique classes (bacteria)
+chosen_bac3 = df_bac %>% filter(Phylum %in% chosen_bac, !is.na(Class), Class != "") %>%
+  filter(Class != "Gammaproteobacteria") %>%
+  distinct(Class) %>%
+  pull(Class)
+```
+
+#### 3.2 \| Prepare joint abundances df
+
+After importing our data, we'll apply the filter to analyse only putative SOM-cycling taxa, creating a joint bacteria-fungi df for subsequent plotting with `ggplot2`.
+
+```{r prepare, message=FALSE, warning=FALSE, results='hide'}
+## Make a new grouping column for OM cyclers
+df_bac2 <- df_bac %>% 
+  mutate(Group = if_else(Class %in% chosen_bac3, "SOM-cycling taxa", "Other"))
+
+df_fun2 <- df_fun %>%
+  mutate(Group = if_else(Order %in% chosen_fun2, "SOM-cycling taxa", "Other"))
+
+## Summarize relative abundance by sample and group
+df_bac_summary <- df_bac2 %>% group_by(Sample, site, Group) %>%
+  summarise(Abundance = sum(Abundance)) %>% ungroup()
+
+df_fun_summary <- df_fun2 %>% group_by(Sample, site, Group) %>%
+  summarise(Abundance = sum(Abundance)) %>% ungroup()
+
+## Add grouping column (bacteria/fungi)
+df_bac_summary <- df_bac_summary %>% mutate(Community = "Bacteria")
+df_fun_summary    <- df_fun_summary %>% mutate(Community = "Fungi")
+
+## Bind community dfs
+df_bac.fun_summary <- bind_rows(df_bac_summary, df_fun_summary)
+
+## Group OM cyclers of each sample for combined community 
+df_combined_summary <- df_bac.fun_summary %>% group_by(Sample, Group, site) %>%
+  summarise(Total_Abundance = sum(Abundance), .groups = "drop")
+
+## Recalculate relative abundances on base of community sum = 2 (instead of 1)
+df_combined_RA <- df_combined_summary %>%
+  group_by(Sample) %>%
+  mutate(Relative_Abundance = Total_Abundance / sum(Total_Abundance)) %>%
+  ungroup()
+
+## Actually plot cumulative abundances
+library(ggplot2)
+ggplot(df_fun_summary, aes(x = Sample, y = Abundance, fill = Group)) +
+  geom_bar(stat = "identity") +
+  labs(x = NULL, y = "Relative abundance", fill = "Taxa group") +
+  ggpubr::theme_pubr() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(labels = function(x) sprintf("%.0f%%", x * 100)) +
+  scale_fill_manual(values=c("SOM-cycling taxa"="bisque2", "Other"="lightgrey")) +
+  facet_grid(~site, scales = "free_x")
+```
+
+### 4 \| Plot individual abundances of bacterial and fungal SOM-cycling taxa
+
+First, we load dependencies and define a common theme for the plot.
+
+```{r prep2, message=FALSE, warning=FALSE, results='hide', tidy=TRUE}
+## Load dependencies
+library(dplyr)
+library(ggplot2)
+library(forcats)
+
+## Define common theme
+## define theme 
+theme_bubble <- function(){ 
+  theme(legend.key=element_blank(), 
+        axis.text.x = element_text(colour = "black", size = 9, angle = 0, vjust = 0.3, hjust = 1), 
+        axis.text.y = element_text(colour = "black", face = "italic", size = 9), 
+        legend.text = element_text(size = 10, colour ="black"), 
+        legend.title = element_text(size = 11, face = "plain"), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(colour = "black"),
+        strip.background = element_blank(),
+        legend.position = "right")}
+```
+
+Next, we extract the relative abundance means for each taxa at the chosen taxonomic level to plot later.
+
+```{r prep3, message=FALSE, warning=FALSE, results='hide', tidy=TRUE}
+## define parameters
+bac_level <- "Class"
+fun_level <- "Class"
+sample_order <- NULL
+
+## extract means for each taxa at rank
+class_mean.fun <- df_fun %>%
+  filter(!is.na(Class)) %>%
+  group_by(subsite, season, Sample, Class) %>%  
+  summarise(sample_RA = sum(Abundance), .groups = "drop") %>%
+  group_by(subsite, season, Class) %>%
+  summarise(mean_RA = mean(sample_RA) * 100, sd_RA   = sd(sample_RA) * 100, .groups = "drop") %>%
+  arrange(subsite, season, desc(mean_RA))
+
+phyla_mean.bac <- df_bac %>%
+  mutate(taxa_plot = ifelse(Phylum == "Pseudomonadota" & Class == "Gammaproteobacteria", "Other", Phylum)) %>% 
+  filter(!is.na(taxa_plot)) %>%
+  group_by(subsite, season, Sample, taxa_plot) %>%   
+  summarise(sample_RA = sum(Abundance), .groups = "drop") %>%
+  group_by(subsite, season, taxa_plot) %>%
+  summarise(mean_RA = mean(sample_RA) * 100, sd_RA   = sd(sample_RA) * 100, .groups = "drop") %>%
+  arrange(subsite, season, desc(mean_RA))
+```
+
+Next, we bind our data for joint plotting to achieve a joint plot legend, and then plot.
+
+```{r plot, message=FALSE, warning=FALSE, results='hide', tidy=TRUE}
+## Steps
+## - first we mutate to later bind
+## - then we filter taxa
+## - then we rename the taxa column to match for successful binding 
+
+## -> Filters
+chosen_bac  # phyla filter 
+chosen_bac2 # class filter
+chosen_fun  # class filter 
+
+## Add shared grouping column
+class_mean.fun <- class_mean.fun %>% mutate(Community = "Fungi") %>% 
+  filter(Class %in% chosen_fun) %>% rename(taxa = Class)
+
+phyla_mean.bac <- phyla_mean.bac %>% mutate(Community = "Bacteria") %>%
+  filter(taxa_plot %in% chosen_bac) %>% rename(taxa = taxa_plot)
+
+## Bind dfs into joint object
+taxa_mean.bac.fun <- bind_rows(class_mean.fun, phyla_mean.bac)
+
+## Plot joint df
+library(ggplot2)
+
+taxa_mean.bac.fun %>%
+  mutate(subsite = recode(subsite, "campina"="C2","campinarana"="C1","plateau"="PL","terrace"="TE")) %>%
+  arrange(Community, taxa) %>%              
+  mutate(taxa = factor(taxa, levels = unique(taxa))) %>%
+  ggplot(aes(x = taxa, y = season, size = mean_RA, fill = season)) +
+  geom_point(shape = 21, stroke = 0.6) +
+  coord_flip() +
+  facet_grid(~subsite)+
+  scale_size_continuous(range = c(0.5, 10), labels = function(x) paste0(x, "%")) +
+  theme_bubble() +
+  labs(y=NULL,x=NULL, size = "mean %RA")
+```

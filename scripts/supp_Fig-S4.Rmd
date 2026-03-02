@@ -16,7 +16,7 @@ This script used the respective KEGG orthologue (KO) table to extract predicted 
 
 ### Pre-processing of predicted functional data
 
-First, we import the data into R. KOs are filtered based on a separate .xlsx file, which is based on publications from [Xue et al.](https://doi.org/10.3389/fmicb.2021.698286), [Martins et al.](https://doi.org/10.1016/j.apsoil.2024.105715) and [Nalven et al.](https://doi.org/10.1111/1462-2920.15121) Please see the corresponding file in the [corresponding github](https://github.com/JFinck1994/Finck_2026_TropMiCom_under_drought).
+First, we import the data into R. KOs are filtered based on a separate .xlsx file, which is based on publications from [Xue et al.](https://doi.org/10.3389/fmicb.2021.698286), [Martins et al.](https://doi.org/10.1016/j.apsoil.2024.105715) and [Nalven et al.](https://doi.org/10.1111/1462-2920.15121) Please see the corresponding file in the [corresponding github](https://github.com/JFinck1994/Finck_2026_TropMiComUnderDrought).
 
 **Functional table (KO_per_sample.tsv):**
 
@@ -204,3 +204,4 @@ pheatmap(db_pheat,
          annotation_col = ann_db,
          annotation_colors = ann_colors)
 ```
+

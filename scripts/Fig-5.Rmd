@@ -1,0 +1,562 @@
+---
+title: "Fig. 5: Linking taxonomic structure and predicted functional potential"
+author: "Jessica Finck"
+date: "2026-02-01"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+set.seed(123)
+```
+
+This script is used to analyse the composition-function coupling for bacterial communities, using `PICRUSt2` output, feature table and taxonomy data.
+
+**Important!** As specified in the manuscript, we removed sample `DSTB` due to likely contamination. The exclusion step is, henceforth, fully optional when replicating this script.
+
+### 1 \| Pre-processing: Load necessary taxonomic and functional data
+
+#### 1.1 \| Load data for Mantel test
+
+```{r data1, tidy=TRUE, message=FALSE, warning=FALSE, results='hide'}
+## Import data 
+library(readxl)
+library(tibble)
+library(dplyr)
+bac_asv <- read_xlsx("BAC_silva138.2.xlsx", sheet = "asv_inv") %>% 
+  as.data.frame() %>% filter(asv!="DSTB")
+
+bac_dat <- read_xlsx("BAC_silva138.2.xlsx", sheet = "meta_all") %>% 
+  as.data.frame() %>% filter(smp_id != "DSTB")
+
+bac_KO = read.delim("KO_per_sample.tsv", row.names = 1, check.names = FALSE) %>% select(-"DSTB")
+
+## Format datalibrary(janitor)
+library(janitor)
+bac_asv <- bac_asv %>% tibble::column_to_rownames("asv") 
+bac_KO = bac_KO %>% t() 
+
+## Subset data
+tf_samples  <- bac_dat$smp_id[bac_dat$site == "TF"] %>% as.list()
+bac_KO_tf <- bac_KO[row.names(bac_KO) %in% tf_samples,] 
+bac_asv_tf <- bac_asv[row.names(bac_asv) %in% tf_samples,]
+bac_dat_tf <- bac_dat[bac_dat$smp_id %in% tf_samples,]
+
+wse_samples <- bac_dat$smp_id[bac_dat$site == "WSE"]
+bac_KO_wse <- bac_KO[row.names(bac_KO) %in% wse_samples,]
+bac_asv_wse <- bac_asv[row.names(bac_asv) %in% wse_samples,] 
+bac_dat_wse <- bac_dat[bac_dat$smp_id %in% wse_samples,]
+
+## Ensure samples match and are in same order:
+common_asv.ko_tf <- intersect(rownames(bac_asv_tf), rownames(bac_KO_tf))
+common_asv.ko_wse <- intersect(rownames(bac_asv_wse), rownames(bac_KO_wse))
+
+## Reorder rows to be the same order
+## ... terra firme 
+bac_asv_tf  <- bac_asv_tf[common_asv.ko_tf, , drop = FALSE]
+bac_KO_tf <- bac_KO_tf[common_asv.ko_tf, , drop = FALSE]
+
+bac_dat.ko_tf <- bac_dat %>% 
+  filter(smp_id %in% common_asv.ko_tf) %>% 
+  column_to_rownames("smp_id")
+# reorder to match matrices
+bac_dat.ko_tf <- bac_dat.ko_tf[common_asv.ko_tf, , drop = FALSE]
+
+## ... white-sand
+bac_asv_wse  <- bac_asv_wse[common_asv.ko_wse, , drop = FALSE]
+bac_KO_wse <- bac_KO_wse[common_asv.ko_wse, , drop = FALSE]
+bac_dat.ko_wse <- bac_dat %>% 
+  filter(smp_id %in% common_asv.ko_wse) %>% 
+  column_to_rownames("smp_id")
+# reorder to match matrices
+bac_dat.ko_wse <- bac_dat.ko_wse[common_asv.ko_wse, , drop = FALSE]  
+```
+
+After preparing the data, we calculate the necessary distance matrix. Here, we chose *Bray-Curtis dissimilarity* matrix, which is calculated based on normalized (i.e. total sum scaled) read counts. Another way to do it is via *robust Aitchison* (rAitchison) distance, which requires raw counts to be transformed with *robust CLR transformation*. In either case, we are using the `decostand()` function of the `vegan` package. The key difference is that Bray-Curtis distances are non-euclidean, so the resulting ordination is a PCoA, while for rAitchison the transformation brings the data into an euclidean space, rendering the resulting ordinations euclidean. Both are viable options.
+
+```{r distances, tidy=TRUE, message=FALSE, warning=FALSE, results='hide'}
+library(vegan)
+
+## Calculate rAitchison dist
+dist_asv_tf.rAit  <- bac_asv_tf %>% 
+  decostand(method = "rclr") %>% 
+  vegdist(method = "euclidean")  
+dist_ko_tf.rAit <- bac_KO_tf %>% 
+  decostand(method = "rclr") %>% 
+  vegdist(method = "euclidean")
+
+dist_asv_wse.rAit <- bac_asv_wse %>% 
+  decostand(method = "rclr") %>% 
+  vegdist(method = "euclidean")
+dist_ko_wse.rAit <- bac_KO_wse %>% 
+  decostand(method = "rclr") %>% 
+  vegdist(method = "euclidean")
+
+## Calculate Bray-Curtis dist
+dist_asv_tf.bray  <- bac_asv_tf %>% 
+  decostand(method = "total", MARGIN = 1) %>% 
+  vegdist(method = "bray")
+dist_ko_tf.bray <- bac_KO_tf %>% 
+  decostand(method = "total", MARGIN = 2) %>% 
+  vegdist(method = "bray")
+
+dist_asv_wse.bray  <- bac_asv_wse %>% 
+  decostand(method = "total", MARGIN = 1) %>% 
+  vegdist(method = "bray")
+dist_ko_wse.bray <- bac_KO_wse %>% 
+  decostand(method = "total", MARGIN = 2) %>% 
+  vegdist(method = "bray")
+
+## Sanity check: sample labels match between distance objects
+stopifnot(all(labels(dist_asv_tf.bray) == labels(dist_ko_tf.bray)))
+stopifnot(all(labels(dist_asv_wse.bray) == labels(dist_ko_wse.bray)))
+
+stopifnot(all(labels(dist_asv_tf.rAit) == labels(dist_ko_tf.rAit)))
+stopifnot(all(labels(dist_asv_wse.rAit) == labels(dist_ko_wse.rAit)))
+```
+
+#### 1.2 \| Load data for Procrustes analysis
+
+Hypothetically, this is the exact same procedure are for loading and preparing the Mantel test objects, with the exception that we – specifically – excluded sample `DSTB` for Mantel tests but kept it for Procrustes analysis to show a fuller picture. Hence, we reload the "Load data for Mantel test" but modified object names to keep both within the R markdown environment.
+
+```{r data2, tidy=TRUE, message=FALSE, warning=FALSE, results='hide'}
+## Import data 
+library(readxl)
+library(tibble)
+library(dplyr)
+bac_asv2 <- read_xlsx("BAC_silva138.2.xlsx", sheet = "asv_inv") %>% 
+  as.data.frame()
+
+bac_dat2 <- read_xlsx("BAC_silva138.2.xlsx", sheet = "meta_all") %>% 
+  as.data.frame() 
+
+bac_KO2 = read.delim("KO_per_sample.tsv", row.names = 1, check.names = FALSE)
+
+## Format datalibrary(janitor)
+library(janitor)
+bac_asv2 <- bac_asv2 %>% tibble::column_to_rownames("asv") 
+bac_KO2 = bac_KO2 %>% t() 
+
+## Subset data
+tf_samples2  <- bac_dat2$smp_id[bac_dat2$site == "TF"] %>% as.list()
+bac_KO_tf2 <- bac_KO2[row.names(bac_KO2) %in% tf_samples2,] 
+bac_asv_tf2 <- bac_asv2[row.names(bac_asv2) %in% tf_samples2,]
+bac_dat_tf2 <- bac_dat2[bac_dat2$smp_id %in% tf_samples2,]
+
+wse_samples2 <- bac_dat2$smp_id[bac_dat2$site == "WSE"]
+bac_KO_wse2 <- bac_KO2[row.names(bac_KO2) %in% wse_samples2,]
+bac_asv_wse2 <- bac_asv2[row.names(bac_asv2) %in% wse_samples2,] 
+bac_dat_wse2 <- bac_dat2[bac_dat2$smp_id %in% wse_samples2,]
+
+## Ensure samples match and are in same order:
+common_asv.ko_tf2 <- intersect(rownames(bac_asv_tf2), rownames(bac_KO_tf2))
+common_asv.ko_wse2 <- intersect(rownames(bac_asv_wse2), rownames(bac_KO_wse2))
+
+## Reorder rows to be the same order
+## ... terra firme 
+bac_asv_tf2  <- bac_asv_tf2[common_asv.ko_tf2, , drop = FALSE]
+bac_KO_tf2 <- bac_KO_tf2[common_asv.ko_tf2, , drop = FALSE]
+
+bac_dat.ko_tf2 <- bac_dat2 %>% 
+  filter(smp_id %in% common_asv.ko_tf2) %>% 
+  column_to_rownames("smp_id")
+# reorder to match matrices
+bac_dat.ko_tf2 <- bac_dat.ko_tf2[common_asv.ko_tf2, , drop = FALSE]
+
+## ... white-sand
+bac_asv_wse2  <- bac_asv_wse2[common_asv.ko_wse2, , drop = FALSE]
+bac_KO_wse2 <- bac_KO_wse2[common_asv.ko_wse2, , drop = FALSE]
+bac_dat.ko_wse2 <- bac_dat2 %>% 
+  filter(smp_id %in% common_asv.ko_wse2) %>% 
+  column_to_rownames("smp_id")
+# reorder to match matrices
+bac_dat.ko_wse2 <- bac_dat.ko_wse2[common_asv.ko_wse2, , drop = FALSE]  
+
+## Calculate Bray-Curtis dist
+library(vegan)
+dist_asv_tf.bray2  <- bac_asv_tf2 %>% 
+  decostand(method = "total", MARGIN = 1) %>% 
+  vegdist(method = "bray")
+dist_ko_tf.bray2 <- bac_KO_tf2 %>% 
+  decostand(method = "total", MARGIN = 2) %>% 
+  vegdist(method = "bray")
+
+dist_asv_wse.bray2  <- bac_asv_wse2 %>% 
+  decostand(method = "total", MARGIN = 1) %>% 
+  vegdist(method = "bray")
+dist_ko_wse.bray2 <- bac_KO_wse2 %>% 
+  decostand(method = "total", MARGIN = 2) %>% 
+  vegdist(method = "bray")
+```
+
+#### 1.3 \| Load data for cumulative nutrient cycling vs. drought response potential
+
+**Important!** PICRUSt2 files were generated within the QIIME2 environment using the `picrust2.py` pipeline. The script can be [**found here**](https://github.com/JFinck1994/general_scripts/blob/main/qiime2_amplicon-16S-PE-read-processing.sh)**.**
+
+```{r data3, tidy=TRUE, message=FALSE, warning=FALSE, results='hide'}
+library(readxl)
+library(dplyr)
+bac_dat <- read_xlsx("BAC_silva138.2.xlsx", sheet = "meta_all") %>% 
+  as.data.frame() %>% 
+  filter(smp_id != "DSTB")
+bac_KO = read.delim("KO_per_sample.tsv", row.names = 1, check.names = FALSE) %>%
+  dplyr::select(-"DSTB")
+
+## Normalize data
+## ! Important: Rows must be samples
+library(janitor)
+library(vegan)
+bac_KO = as.data.frame(x = t(bac_KO), stringsAsFactors = FALSE)
+bac_KO = decostand(bac_KO, method = "total")
+## check if normalized correctly (rows == 1, columns =! 1)
+rowSums(bac_KO)
+colSums(bac_KO)
+
+## Define subset data based on forest type
+tf_samples  <- bac_dat$smp_id[bac_dat$site == "TF"] %>% as.list()
+ws_samples <- bac_dat$smp_id[bac_dat$site == "WSE"]
+
+## Subset data 
+bac_KO_tf <- bac_KO[row.names(bac_KO) %in% tf_samples,] 
+bac_KO_ws <- bac_KO[row.names(bac_KO) %in% ws_samples,]
+
+bac_dat_tf <- bac_dat[bac_dat$smp_id %in% tf_samples,]
+bac_dat_ws <- bac_dat[bac_dat$smp_id %in% ws_samples,]
+```
+
+### 2 \| Mantel test between taxonomic and functional composition
+
+```{r filter, tidy=FALSE, message=FALSE, warning=FALSE, results='hide'}
+set.seed(123)
+
+## Run Mantel test (rAitch)
+## - pearson and spearman are both viable options since we work with euclidean dist
+mantel(dist_asv_tf.rAit, 
+       dist_ko_tf.rAit,
+       method = "spearman", 
+       permutations = 999)
+
+mantel(dist_asv_wse.rAit, 
+       dist_ko_wse.rAit, 
+       method = "spearman", 
+       permutations = 999)
+
+## Run Mantel test (Bray-Curtis)
+## - spearman only since these are non-euclidean dist
+mantel(dist_asv_tf.bray, 
+       dist_ko_tf.bray,
+       method = "spearman", 
+       permutations = 999)
+
+mantel(dist_asv_wse.bray, 
+       dist_ko_wse.bray, 
+       method = "spearman", 
+       permutations = 999)
+
+## Define Mantel results as object for plotting 
+mantel_tf.bray <- data.frame(dist_asv_tf.bray = as.vector(dist_asv_tf.bray),
+                             dist_ko_tf.bray = as.vector(dist_ko_tf.bray))
+mantel_ws.bray <- data.frame(dist_asv_wse.bray = as.vector(dist_asv_wse.bray),
+                             dist_ko_wse.bray = as.vector(dist_ko_wse.bray))
+
+## Visualize Mantel results 
+library(ggplot2)
+library(scales)
+
+ggplot(mantel_tf.bray, aes(x = dist_asv_tf.bray, y = dist_ko_tf.bray)) + 
+  geom_point(size = 3, alpha = 0.4) + 
+  geom_smooth(method = "lm", color = "blue") + 
+  ggpubr::theme_pubr() +
+  labs(x = "Taxonomic dissimilarity", y = "Functional dissimilarity") +
+  scale_y_continuous(
+    labels = scales::number_format(accuracy = 0.1, decimal.mark = '.'), 
+    breaks = c(0,0.2,0.4,0.6,0.8)) +
+  scale_x_continuous(
+    labels = scales::number_format(accuracy = 0.1, decimal.mark = '.'), 
+    breaks = c(0.2,0.4,0.6,0.8,1.0)) +
+  annotate("text", x = 0.5, y = -0.15, 
+           label = paste0("Mantel r = ", round(0.7443, 3),", p < 0.01"), 
+           hjust = 0.8, vjust = 0.2, size = 4, fontface = "italic") +
+  theme(axis.text.x = element_text(size=10), 
+        axis.text.y = element_text(size=10), 
+        panel.border = element_rect(colour = "black", fill=NA))
+
+ggplot(mantel_ws.bray, aes(x = dist_asv_wse.bray, y = dist_ko_wse.bray)) +
+  geom_point(size = 3, alpha = 0.4) + 
+  geom_smooth(method = "lm", color = "blue") + 
+  ggpubr::theme_pubr() +
+  labs(x = "Taxonomic dissimilarity", y = "Functional dissimilarity") +
+  scale_y_continuous(
+    labels = scales::number_format(accuracy = 0.1, decimal.mark = '.'), 
+    breaks = c(0,0.2,0.4,0.6,0.8)) +
+  scale_x_continuous(
+    labels = scales::number_format(accuracy = 0.1, decimal.mark = '.'), 
+    breaks = c(0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9)) +
+  annotate("text", x = 0.5, y = -0.1, 
+           label = paste0("Mantel r = ", round(0.5907, 3),", p < 0.001"), 
+           hjust = 0.65, vjust = 0.2, size = 4, fontface = "italic") +
+  theme(axis.text.x = element_text(size=10), 
+        axis.text.y = element_text(size=10), 
+        panel.border = element_rect(colour = "black", fill=NA))
+```
+
+### 3 \| Procrustes test / ordination concordance
+
+Similar to Mantel tests, Procrustes analysis can be performed w/ PCoA or PCA, depending on the distance matrix. Here, we chose *Bray-Curtis dissimilarity* matrix, which is also what the script is aimed for. Using the PCA/rAitchison distance from (1.1) changes the script a little bit. Instead of using the `pcoa()` function of the `ape` package, we are using the `prcomp()` function to calculate PCA ordinations (check alternative code below). In this case, the `pcoa_*` objects have to be replaced with `pca_*`.
+
+`pca_asv_tf  <- bac_asv_tf %>% decostand(method = "rclr") %>% prcomp()`
+
+`pca_ko_tf <- bac_KO_tf %>% decostand(method = "rclr") %>% prcomp()`
+
+`pca_asv_wse  <- bac_asv_wse %>% decostand(method = "rclr") %>% prcomp()`
+
+`pca_ko_wse <- bac_KO_wse %>% decostand(method = "rclr") %>% prcomp()`
+
+```{r procrustes, tidy=FALSE, message=FALSE, warning=FALSE, results='hide'}
+## Create PCoA for Procrustes
+library(ape)
+pcoa_asv_tf  <- pcoa(dist_asv_tf.bray2)
+pcoa_ko_tf <- pcoa(dist_ko_tf.bray2)
+pcoa_asv_wse  <- pcoa(dist_asv_wse.bray2)
+pcoa_ko_wse <- pcoa(dist_ko_wse.bray2)
+
+## Extract first two PCoA axes
+coords_asv_tf  <- as.data.frame(pcoa_asv_tf$vectors[, 1:2])
+coords_ko_tf <- as.data.frame(pcoa_ko_tf$vectors[, 1:2])
+coords_asv_wse  <- as.data.frame(pcoa_asv_wse$vectors[, 1:2])
+coords_ko_wse <- as.data.frame(pcoa_ko_wse$vectors[, 1:2])
+
+## Rename columns
+colnames(coords_asv_tf)  <- c("PCoA1_asv", "PCoA2_asv")
+colnames(coords_ko_tf) <- c("PCoA1_ko", "PCoA2_ko")
+colnames(coords_asv_wse)  <- c("PCoA1_asv", "PCoA2_asv")
+colnames(coords_ko_wse) <- c("PCoA1_ko", "PCoA2_ko")
+
+coords_asv_tf$smp_id  <- rownames(bac_asv_tf2)
+coords_ko_tf$smp_id <- rownames(bac_KO_tf2)
+coords_asv_wse$smp_id  <- rownames(bac_asv_wse2)
+coords_ko_wse$smp_id <- rownames(bac_KO_wse2)
+
+## Merge with metadata
+coords_asv.ko_tf <- left_join(coords_asv_tf, coords_ko_tf, by = "smp_id")
+coords_asv.ko_tf <- left_join(coords_asv.ko_tf, bac_dat2, by = "smp_id")
+coords_asv.ko_wse <- left_join(coords_asv_wse, coords_ko_wse, by = "smp_id")
+coords_asv.ko_wse <- left_join(coords_asv.ko_wse, bac_dat2, by = "smp_id")
+ 
+## prepare PCoA matrices 
+A_tf <- as.matrix(coords_asv_tf[, c("PCoA1_asv", "PCoA2_asv")])
+B_tf <- as.matrix(coords_ko_tf[, c("PCoA1_ko", "PCoA2_ko")])
+rownames(A_tf) <- coords_asv_tf$smp_id
+rownames(B_tf) <- coords_ko_tf$smp_id
+procrustes_tf <- procrustes(A_tf, B_tf, scale = TRUE)
+set.seed(123)
+protest_tf <- protest(A_tf, B_tf, permutations = 999)
+
+A_wse <- as.matrix(coords_asv_wse[, c("PCoA1_asv", "PCoA2_asv")])
+B_wse <- as.matrix(coords_ko_wse[, c("PCoA1_ko", "PCoA2_ko")])
+rownames(A_wse) <- coords_asv_wse$smp_id
+rownames(B_wse) <- coords_ko_wse$smp_id
+procrustes_wse <- procrustes(A_wse, B_wse, scale = TRUE)
+set.seed(123)
+protest_wse <- protest(A_wse, B_wse, permutations = 999)
+
+## summary protest / procrustes
+summary(protest_tf)
+summary(procrustes_tf)
+summary(protest_wse)
+summary(procrustes_wse)
+
+## prepare for plotting 
+fittedB_tf <- as.data.frame(procrustes_tf$Yrot)
+colnames(fittedB_tf) <- c("PCoA1_func_rot", "PCoA2_func_rot")
+fittedB_tf$smp_id <- rownames(fittedB_tf)
+
+fittedB_wse <- as.data.frame(procrustes_wse$Yrot)
+colnames(fittedB_wse) <- c("PCoA1_func_rot", "PCoA2_func_rot")
+fittedB_wse$smp_id <- rownames(fittedB_wse)
+
+plotdf_tf <- coords_asv.ko_tf %>% left_join(fittedB_tf, by = "smp_id")
+plotdf_wse <- coords_asv.ko_wse %>% left_join(fittedB_wse, by = "smp_id")
+
+## Plot Procrustes:: Terra firme
+library(ggplot2)
+library(ggrepel)
+library(ggpubr)
+
+ggplot(plotdf_tf, aes(x = PCoA1_asv, y = PCoA2_asv)) +
+  geom_segment(aes(xend = PCoA1_func_rot, yend = PCoA2_func_rot), 
+               color = "black", 
+               arrow = arrow(length = unit(0.2, "cm"))) +
+  geom_point(aes(fill = season), 
+             shape = 24, 
+             color = "black", 
+             size = 4, 
+             stroke = 0.8) +
+  geom_point(aes(x = PCoA1_func_rot, y = PCoA2_func_rot, fill = season), 
+             shape = 21, 
+             color = "black", 
+             size = 4, 
+             stroke = 0.8) +
+  scale_fill_manual(values = c("dry" = "lightgreen", "wet" = "forestgreen")) +
+  scale_color_manual(values = c("dry" = "lightgreen", "wet" = "forestgreen")) +
+  ggpubr::theme_pubr() + 
+  labs(x = "Dimension 1", y = "Dimension 2", fill = "Season") +
+  scale_y_continuous(labels = scales::number_format(accuracy = 0.1, decimal.mark = '.')) +
+  scale_x_continuous(labels = scales::number_format(accuracy = 0.1, decimal.mark = '.')) +
+  geom_text_repel(aes(label = smp_id), size = 2.5, max.overlaps = 12) +
+  theme(axis.text.x = element_text(size=10), 
+        axis.text.y = element_text(size=10), 
+        panel.border = element_rect(colour = "black", fill=NA), 
+        legend.position = "none") +
+  annotate("text", x = -0.55, y = 0.55, 
+           label = paste0("PROTEST \n m² = ", 
+                          round(protest_tf$ss, 3),
+                          "\np =", signif(protest_tf$signif,3)), 
+           hjust = 0.2, vjust = 1, size = 4, fontface = "italic") 
+
+ggplot(plotdf_wse, aes(x = PCoA1_asv, y = PCoA2_asv)) +
+  geom_segment(aes(xend = PCoA1_func_rot, yend = PCoA2_func_rot, color = subsite), 
+               linewidth = 0.6, alpha = 0.8) +
+  geom_point(aes(fill = season), 
+             shape = 24, 
+             color = "black", 
+             size = 4, 
+             stroke = 0.9) +
+  geom_point(aes(x = PCoA1_func_rot, y = PCoA2_func_rot, fill = season), 
+             shape = 21, 
+             color = "black", 
+             size = 4, 
+             stroke = 0.8) +
+  scale_fill_manual(values = c("dry" = "bisque1", "wet" = "bisque4")) +
+  scale_color_manual(values = c("dry" = "bisque1", "wet" = "bisque4")) +
+  ggpubr::theme_pubr() + 
+  labs(x = "Dimsension 1", y = "Dimension 2", fill = "Season") +
+  scale_y_continuous(labels = scales::number_format(accuracy = 0.1, decimal.mark = '.')) +
+  scale_x_continuous(labels = scales::number_format(accuracy = 0.1, decimal.mark = '.')) +
+  geom_text_repel(aes(label = smp_id), size = 2.5, max.overlaps = 12) +
+  theme(axis.text.x = element_text(size=10), 
+        axis.text.y = element_text(size=10), 
+        panel.border = element_rect(colour = "black", fill=NA), 
+        legend.position = "none") +
+  annotate("text", x = -0.4, y = -0.25, 
+           label = paste0("PROTEST \n m² = ", 
+                          round(protest_wse$ss, 3),
+                          "\np =", signif(protest_wse$signif,3)), 
+           hjust = 0.2, vjust = 1, size = 4, fontface = "italic") 
+```
+
+### 4 \| Cumulative nutrient cycling vs. drought response potential
+
+First, we need to filter our PICRUSt2-derived KO data to only keep KOs of interest (in our case K numbers central to nutrient cycling and drought response and molecule transport pathways acc. to `KO_core_genes`).
+
+```{r NCDR1, tidy=TRUE, message=FALSE, warning=FALSE, results='hide'}
+## Load K number filter
+library(readxl)
+KO_core_genes <- read_excel("KO_core_genes.XLSX", sheet = "combined_genes_DOM")
+
+## Create long format data w/ KOs as new column (for later filter)
+library(tidyverse)
+bac_KO_tf.long <- bac_KO_tf %>%
+  rownames_to_column("smp_id") %>% 
+  pivot_longer(cols = -smp_id, names_to = "k_number", values_to = "rel_abund")
+
+bac_KO_ws.long <- bac_KO_ws %>%
+  rownames_to_column("smp_id") %>%
+  pivot_longer(cols = -smp_id, names_to = "k_number", values_to = "rel_abund")
+
+## Apply filter
+bac_KO_tf.filt <- bac_KO_tf.long %>% semi_join(KO_core_genes, by = "k_number")
+bac_KO_ws.filt <- bac_KO_ws.long %>% semi_join(KO_core_genes, by = "k_number")
+```
+
+Next, we need to join our functional data w/ our metadata, and functional group assignments, aka which K numbers belong to which group (nutrient cycling or drought response).
+
+**Important!** For joining w/ the functional groups, the selected columns are the categorizations for the different K numbers that can be found in `KO_core_genes`.
+
+```{r NCDR2, tidy=TRUE, message=FALSE, warning=FALSE, results='hide'}
+## Join w/ metadata/season
+bac_KO_tf.filt <- bac_KO_tf.filt %>% left_join(bac_dat_tf %>% select(smp_id, season), by = "smp_id")
+bac_KO_ws.filt <- bac_KO_ws.filt %>% left_join(bac_dat_ws %>% select(smp_id, season), by = "smp_id")
+
+## Join w/ metadata/subsite
+bac_KO_tf.filt <- bac_KO_tf.filt %>% left_join(bac_dat_tf %>% select(smp_id, subsite), by = "smp_id")
+bac_KO_ws.filt <- bac_KO_ws.filt %>% left_join(bac_dat_ws %>% select(smp_id, subsite), by = "smp_id")
+
+## Join w/ functional groups
+bac_KO_tf.filt <- bac_KO_tf.filt %>% 
+  left_join(KO_core_genes %>% 
+              select(k_number, bar_filter, bar_group, bar_pathway, z_group1, z_group2, z_group3), by = "k_number")
+
+bac_KO_ws.filt <- bac_KO_ws.filt %>% 
+  left_join(KO_core_genes %>% 
+              select(k_number, bar_filter, bar_group, bar_pathway, z_group1, z_group2, z_group3), by = "k_number")
+```
+
+Finally, we prepare our data for plotting by summarizing at the chosen pathway/functional group level, and then binding together the dfs of both forest types for a joint plot.
+
+```{r NCDR3, tidy=FALSE, message=FALSE, warning=FALSE, results='hide'}
+library(dplyr)
+library(tidyr)
+
+## Write function to summarize multiple grouping variables
+summarize_abundance <- function(
+    df, 
+    group_vars, 
+    value_col = "rel_abund", 
+    sample_col = "smp_id", 
+    season_col = "season", 
+    site_col = "subsite") {
+  
+  summary_list <- list()
+  
+  for (g in group_vars) {
+    
+    temp <- df %>%
+      group_by(
+        !!sym(sample_col), 
+        !!sym(season_col), 
+        !!sym(site_col), 
+        !!sym(g)) %>%
+      summarise(rel_abund = sum(!!sym(value_col)), .groups = "drop") %>%
+      rename(group = !!sym(g)) %>%
+      mutate(group_type = g)
+    
+    summary_list[[g]] <- temp
+  }
+  
+  bind_rows(summary_list)
+}
+
+## Define the grouping variables you want summaries for
+group_vars <- c("z_group1", "z_group2", "z_group3","bar_filter", "bar_pathway", "bar_group")
+
+## Write summary dfs for each forest type 
+summary_KO.tf <- summarize_abundance(bac_KO_tf.filt, group_vars)
+summary_KO.ws <- summarize_abundance(bac_KO_ws.filt, group_vars)
+
+## Combine into 1 joint summary df w/ new forest_type column
+summary_KO.tf <- summary_KO.tf %>% mutate(forest_type = "Terra firme")
+summary_KO.ws <- summary_KO.ws %>% mutate(forest_type = "White-sand")
+summary_KO_all <- bind_rows(summary_KO.tf, summary_KO.ws)
+
+## Plot as barplot
+library(ggpubr)
+summary_KO_all %>% 
+  filter(group_type == "bar_filter") %>% 
+  ggbarplot("group", "rel_abund",
+            fill = "season", color = "season", 
+            palette = "Paired",
+            position = position_dodge(0.8), 
+            add = c("mean_sd"), 
+            error.plot = "upper_errorbar",
+            facet.by = "forest_type") +
+  scale_y_continuous(labels = function(x) sprintf("%.1f", x * 100)) +
+  labs(y = "Mean %RA", x = NULL) +
+  stat_compare_means(aes(group = season), label = "p.signif", hide.ns = TRUE) +
+  geom_jitter(aes(y=rel_abund, color = season), size = 3, width = 0.1, alpha = 0.7) +
+  theme(strip.background = element_blank(), 
+        strip.text = element_text(size = 12, hjust = 0), 
+        axis.text.x = element_text(angle = 45, hjust = 1))
+```

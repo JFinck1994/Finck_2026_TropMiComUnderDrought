@@ -1,0 +1,149 @@
+---
+title: "Fig. 4: Drought effects on predicted bacterial functional potential"
+author: "Jessica Finck"
+date: "2026-02-01"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+set.seed(123)
+```
+
+This script is used to analyse the bacterial functional potential derived from PICRUSt2 using the `ggpicrust2` package.
+
+### 1 \| Pre-processing: Load PICRUSt2 data 
+
+We are using the `pathway_pca()` and `pathway_gsea()` functions for the upcoming analysis. First, we need to load and subset the data based on forest type (*terra firme*, white-sand).
+
+**Important!** PICRUSt2 files were generated within the QIIME2 environment using the `picrust2.py` pipeline. The script can be [**found here**](https://github.com/JFinck1994/general_scripts/blob/main/qiime2_amplicon-16S-PE-read-processing.sh)**.**
+
+```{r phyloseq, tidy=TRUE, message=FALSE, warning=FALSE, results='hide'}
+## Load dependencies
+library(readr)
+library(tibble)
+library(tidyverse)
+library(ggprism)
+library(patchwork)
+library(dplyr)
+library(tidyr)
+library(dplyr)
+
+## Import data 
+KO_abundance = read.delim("KO_per_sample.tsv") %>% select(-"DSTB")
+
+metadata = read_delim("BAC_silva138.2.txt", delim = "\t", escape_double = FALSE, trim_ws = TRUE)
+metadata = metadata[,-1] %>% rename(sample_name = smp_id) %>% filter(sample_name != "DSTB")
+
+## Make grouping variable
+metadata$Group <- paste(metadata$site, metadata$season, sep = "_")
+metadata$Group <- factor(metadata$Group, levels = c("TF_dry", "TF_wet", "WSE_dry", "WSE_wet"))
+
+## Define subset filters
+tf_samples  <- metadata$sample_name[metadata$site == "TF"]
+wse_samples <- metadata$sample_name[metadata$site == "WSE"]
+
+## Subset Picrust2::KO data
+KO_tf <- KO_abundance[, c("function.", tf_samples), drop = FALSE]
+KO_wse <- KO_abundance[, c("function.", wse_samples), drop = FALSE]
+
+KO_tf = KO_tf %>% as_tibble()
+KO_wse = KO_wse %>% as_tibble()
+
+## Subset metadata for PCA
+metadata_tf  <- metadata[metadata$site == "TF", , drop = FALSE]
+metadata_wse <- metadata[metadata$site == "WSE", , drop = FALSE]
+
+## Subset metadata for GSEA 
+metadata_tf2  <- metadata_tf %>% column_to_rownames(var = "sample_name")
+metadata_wse2 <- metadata_wse %>% column_to_rownames(var = "sample_name")
+```
+
+### 2 \| Run PCA w/ `ggpicrust2`
+
+```{r filter, tidy=FALSE, message=FALSE, warning=FALSE, results='hide'}
+library(ggpicrust2)
+library(ggpubr)
+
+## Picrust2::KO PCA - TF only
+pathway_pca(
+  abundance = KO_tf %>% column_to_rownames("function."), 
+  metadata = metadata_tf, 
+  group = "season", 
+  colors = c("dry" = "lightgreen", "wet"="seagreen4"))
+
+## Picrust2::KO PCA - WS only
+pathway_pca(
+  abundance = KO_wse %>% column_to_rownames("function."), 
+  metadata = metadata_wse, 
+  group = "season", 
+  colors = c("dry" = "bisque2", "wet"="bisque4"))
+```
+
+### 3 \| Run Gene Set Enrichment Analysis w/ `ggpicrust2`
+
+```{r import, tidy=TRUE, message=FALSE, warning=FALSE, results='hide'}
+## Load dependencies
+library(ggpicrust2)
+library(enrichplot)
+library(fgsea)
+
+## Prepare GSEA files: pathway type KEGG 
+gsea_kegg.tf <- pathway_gsea(
+  abundance = KO_tf %>% column_to_rownames("function."),
+  metadata = metadata_tf2, 
+  group = "season", 
+  pathway_type = "KEGG")
+
+gsea_kegg.wse <- pathway_gsea(
+  abundance = KO_wse %>% column_to_rownames("function."),
+  metadata = metadata_wse2, 
+  group = "season", 
+  pathway_type = "KEGG")
+
+## Prepare GSEA files: pathway type Gene orthologues
+gsea_go.tf <- pathway_gsea(
+  abundance = KO_tf %>% column_to_rownames("function."), 
+  metadata = metadata_tf2,
+  group = "season",  
+  pathway_type = "GO", 
+  go_category = "BP")
+
+gsea_go.wse <- pathway_gsea(
+  abundance = KO_wse %>% column_to_rownames("function."), 
+  metadata = metadata_wse2,
+  group = "season",  
+  pathway_type = "GO", 
+  go_category = "BP")
+
+## Annotate GSEA files 
+kegg_annotated.tf <- gsea_pathway_annotation(gsea_kegg.tf, pathway_type = "KEGG")
+kegg_annotated.wse <- gsea_pathway_annotation(gsea_kegg.wse, pathway_type = "KEGG")
+
+go_annotated.tf <- gsea_pathway_annotation(gsea_go.tf, pathway_type = "GO")
+go_annotated.wse <- gsea_pathway_annotation(gsea_go.wse, pathway_type = "GO")
+
+## Drop human microbiome/diseases pathways 
+kegg_annotated.tf = kegg_annotated.tf[-(which(kegg_annotated.tf$pathway_name.y %in% c("Alzheimer disease", "Huntington disease","Parkinson disease","Shigellosis", "Bacterial invasion of epithelial cells","Staphylococcus aureus infection"))),]
+
+kegg_annotated.wse = kegg_annotated.wse[-(which(kegg_annotated.wse$pathway_name.y %in% c("Alzheimer disease", "Huntington disease","Parkinson disease","Shigellosis", "Bacterial invasion of epithelial cells","Staphylococcus aureus infection"))),]
+
+## Apply p-value filter (only keep pws that are signif)
+kegg_annotated.tf.signif <- kegg_annotated.tf %>% filter(p.adjust < 0.1)
+kegg_annotated.wse.signif <- kegg_annotated.wse %>% filter(p.adjust < 0.1)
+
+## Plot GSEA 
+visualize_gsea(gsea_results = kegg_annotated.tf.signif, 
+               plot_type = "dotplot", 
+               n_pathways = 40,
+               sort_by = "pvalue", 
+               pathway_label_column = "pathway_name.y")
+
+visualize_gsea(gsea_results = kegg_annotated.wse.signif, 
+               plot_type = "dotplot", 
+               n_pathways = 40,
+               sort_by = "pvalue", 
+               pathway_label_column = "pathway_name.y")
+```

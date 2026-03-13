@@ -4,7 +4,6 @@ author: "Jessica Finck"
 date: "2026-02-01"
 output:
   pdf_document: default
-  html_document: default
 ---
 
 ```{r setup, include=FALSE}
